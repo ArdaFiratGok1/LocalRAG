@@ -77,7 +77,7 @@ def main():
 
     cursor = conn.cursor()
 
-    '''
+    
     cursor.execute("DROP TABLE IF EXISTS documents")
     
     cursor.execute("""
@@ -94,7 +94,7 @@ def main():
         cursor.execute("INSERT INTO documents (text, embedding) VALUES (?, ?)", (chunk['content'], json.dumps(embedding)))
 
     conn.commit()
-    '''
+    
     cursor.execute("SELECT id, text, embedding FROM documents")
     rows = cursor.fetchall()
     print(f"Retrieved {len(rows)} documents.")

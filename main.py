@@ -1,38 +1,53 @@
+import os
+import sqlite3
+import json
 import math
 from foundry_local_sdk import Configuration, FoundryLocalManager
 
-# Knowledge base — each string represents a document
-documents = [
-    "Foundry Local runs AI models directly on your device without cloud connectivity.",
-    "The Foundry Local SDK supports Python, C#, JavaScript, and Rust.",
-    "Embedding models convert text into numerical vectors for similarity search.",
-    "Foundry Local uses ONNX Runtime for efficient model inference on CPUs and GPUs.",
-    "The model catalog provides pre-optimized models that you can download and run locally.",
-    "Retrieval-augmented generation grounds model responses in your own data.",
-    "Vector similarity search finds documents that are semantically close to a query.",
-    "Chat completions generate natural language responses from a prompt and context.",
-]
+def load_and_split(folder_path):
+    if not os.path.exists(folder_path):
+        print(f"Error: The folder '{folder_path}' does not exist.")
+        return []
+    files = os.listdir(folder_path)
+    chunks = []
+    for file in files:
+        file_path = os.path.join(folder_path, file)
+        if os.path.isfile(file_path):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
 
-def cosine_similarity(a, b):
-    """Compute cosine similarity between two vectors."""
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
+                paragraphs = content.split("\n")
+
+                for paragraph in paragraphs:
+                    paragraph = paragraph.strip()
+                    if paragraph and not paragraph.startswith("---") and len(paragraph) > 3:
+                        chunks.append({ "source": file, "content": paragraph })
+
+
+    return chunks
+
+def cosine_similarity(vec_a, vec_b):
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    norm_a = math.sqrt(sum(a * a for a in vec_a))
+    norm_b = math.sqrt(sum(b * b for b in vec_b))
     return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
 
-
-def find_relevant(query_embedding, doc_embeddings, top_k=2):
-    """Return the indices and scores of the top-k most similar documents."""
+def find_relevant(query_embedding, db_rows, top_k=2):
     scores = []
-    for i, doc_emb in enumerate(doc_embeddings):
+    for row in db_rows:
+        doc_id, text, emb_str = row
+        doc_emb = json.loads(emb_str) # Veritabanından gelen string'i listeye çeviriyoruz
+        
         score = cosine_similarity(query_embedding, doc_emb)
-        scores.append((i, score))
+        scores.append((text, score)) # İndis yerine direkt metni (text) saklıyoruz
+        
     scores.sort(key=lambda x: x[1], reverse=True)
     return scores[:top_k]
 
 def main():
-    # Initialize the SDK
-    config = Configuration(app_name="foundry_local_rag")
+
+
+    config = Configuration(app_name="localRAG")
     FoundryLocalManager.initialize(config)
     manager = FoundryLocalManager.instance
 
@@ -45,76 +60,56 @@ def main():
     embedding_model.load()
     embedding_client = embedding_model.get_embedding_client()
 
-    # Embed all documents in a single batch call
-    response = embedding_client.generate_embeddings(documents)
-    doc_embeddings = [item.embedding for item in response.data]
-    print(f"Indexed {len(doc_embeddings)} documents.")
+    total_chunks = load_and_split(r"C:\Users\arda fırat\Desktop\rag_testfiles")
 
-    # Load the chat model
-    chat_model = manager.catalog.get_model("qwen2.5-0.5b")
-    chat_model.download(
-        lambda p: print(f"\rDownloading chat model: {p:.1f}%", end="", flush=True)
-    )
+    response = embedding_client.generate_embeddings([chunk['content'] for chunk in total_chunks])
+    chunk_embeddings = [item.embedding for item in response.data]
+    print(f"Indexed {len(chunk_embeddings)} documents.")
+
+    db_name = "RAGSqlite.db"
+
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+
+    '''
+    cursor.execute("DROP TABLE IF EXISTS documents")
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS documents(
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   text TEXT NOT NULL,
+                   embedding TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+
+    for chunk,embedding in zip(total_chunks, chunk_embeddings):
+        cursor.execute("INSERT INTO documents (text, embedding) VALUES (?, ?)", (chunk['content'], json.dumps(embedding)))
+
+    conn.commit()
+    '''
+    cursor.execute("SELECT id, text, embedding FROM documents")
+    rows = cursor.fetchall()
+    print(f"Retrieved {len(rows)} documents.")
+
     print()
-    chat_model.load()
-    chat_client = chat_model.get_chat_client()
+    query = input("Enter your query: ")
+    response = embedding_client.generate_embeddings([query])
+    query_embedding = response.data[0].embedding
+    
+    
+    results = find_relevant(query_embedding, rows, top_k=3)
 
-    print("\nModels loaded. Ready for questions.")
-    print("\nThe knowledge base contains information about:")
-    print("  - Foundry Local features and architecture")
-    print("  - Supported programming languages")
-    print("  - Embedding models and vector search")
-    print("  - ONNX Runtime inference")
-    print("  - The model catalog")
-    print("  - RAG and chat completions")
-    print("\nExample questions:")
-    print('  "What programming languages does the SDK support?"')
-    print('  "How does Foundry Local run models?"')
-    print('  "What is retrieval-augmented generation?"')
-    print('\nType "quit" to exit.\n')
+    print("Relevant documents:")
+    for text, score in results:
+        print(f"Score: {score:.4f}")
+        print(f"Content: {text}")
+        print("-" * 30)
+    print("="*40)
 
-    # Interactive query loop
-    while True:
-        query = input("Question: ").strip()
-        if not query or query.lower() == "quit":
-            break
-
-        # Embed the query
-        query_response = embedding_client.generate_embedding(query)
-        query_embedding = query_response.data[0].embedding
-
-        # Retrieve the most relevant documents
-        results = find_relevant(query_embedding, doc_embeddings, top_k=2)
-        context = "\n".join(f"- {documents[i]}" for i, _ in results)
-
-        # Build the prompt with retrieved context
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Answer the user's question using only the provided context. "
-                    "If the context doesn't contain enough information, say so.\n\n"
-                    f"Context:\n{context}"
-                ),
-            },
-            {"role": "user", "content": query},
-        ]
-
-        # Stream the response
-        print("Answer: ", end="", flush=True)
-        for chunk in chat_client.complete_streaming_chat(messages):
-            if not chunk.choices:
-                continue
-            content = chunk.choices[0].delta.content
-            if content:
-                print(content, end="", flush=True)
-        print("\n")
-
-    # Clean up
     embedding_model.unload()
-    chat_model.unload()
-    print("Models unloaded. Done!")
-
+    conn.close()
 
 if __name__ == "__main__":
     main()

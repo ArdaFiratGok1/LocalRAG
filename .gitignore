@@ -1,0 +1,25 @@
+# Python sanal ortamı (Environment)
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+
+# Microsoft Foundry Local Modelleri ve Geçici Dosyaları
+# (Modeller çok büyük olduğu için Git'e yüklenmemelidir)
+.foundry_local/
+foundry_local_cache/
+*.onnx
+*.bin
+
+# SQLite Veritabanı ve Yerel Veriler
+# (Veritabanı dosyaları dinamik olarak değiştiği için Git'e eklenmez)
+*.db
+*.sqlite
+*.sqlite3
+
+# İşletim Sistemi ve Kod Editörü Dosyaları
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

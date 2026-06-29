@@ -26,12 +26,15 @@ def load_and_split(folder_path):
 
     return chunks
 
-def cosine_similarity(vec_a, vec_b):
+def sqlite_cosine_similarity(query_emb_json, db_emb_str):
+    vec_a = json.loads(query_emb_json)
+    vec_b = json.loads(db_emb_str)
     dot = sum(a * b for a, b in zip(vec_a, vec_b))
     norm_a = math.sqrt(sum(a * a for a in vec_a))
     norm_b = math.sqrt(sum(b * b for b in vec_b))
     return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
 
+"""
 def find_relevant(query_embedding, db_rows, top_k=2):
     scores = []
     for row in db_rows:
@@ -43,7 +46,7 @@ def find_relevant(query_embedding, db_rows, top_k=2):
         
     scores.sort(key=lambda x: x[1], reverse=True)
     return scores[:top_k]
-
+"""
 def main():
 
 
@@ -69,6 +72,9 @@ def main():
     db_name = "RAGSqlite.db"
 
     conn = sqlite3.connect(db_name)
+
+    conn.create_function("COS_SIM",2,sqlite_cosine_similarity)
+
     cursor = conn.cursor()
 
     '''
@@ -96,10 +102,23 @@ def main():
     print()
     query = input("Enter your query: ")
     response = embedding_client.generate_embeddings([query])
-    query_embedding = response.data[0].embedding
+    query_embedding = response.data[0].embedding #Sorgu vektörünü alıyoruz
+
+    # Sorgu vektörünü SQL'in işlemesi için JSON string'e çeviriyoruz
+    query_emb_json = json.dumps(query_embedding)
+
+    cursor.execute("""
+        SELECT text, COS_SIM(?, embedding) AS score
+                   FROM documents
+                   ORDER BY score DESC
+                   LIMIT 3""", (query_emb_json,))
     
     
+    results=cursor.fetchall()
+
+    """
     results = find_relevant(query_embedding, rows, top_k=3)
+    """
 
     print("Relevant documents:")
     for text, score in results:

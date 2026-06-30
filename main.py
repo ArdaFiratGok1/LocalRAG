@@ -34,6 +34,8 @@ def sqlite_cosine_similarity(query_emb_json, db_emb_str):
     norm_b = math.sqrt(sum(b * b for b in vec_b))
     return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
 
+
+
 """
 def find_relevant(query_embedding, db_rows, top_k=2):
     scores = []
@@ -47,29 +49,13 @@ def find_relevant(query_embedding, db_rows, top_k=2):
     scores.sort(key=lambda x: x[1], reverse=True)
     return scores[:top_k]
 """
-def main():
-
-
-    config = Configuration(app_name="localRAG")
-    FoundryLocalManager.initialize(config)
-    manager = FoundryLocalManager.instance
-
-    # Load the embedding model
-    embedding_model = manager.catalog.get_model("qwen3-embedding-0.6b")
-    embedding_model.download(
-        lambda p: print(f"\rDownloading embedding model: {p:.1f}%", end="", flush=True)
-    )
-    print()
-    embedding_model.load()
-    embedding_client = embedding_model.get_embedding_client()
-
-    total_chunks = load_and_split(r"C:\Users\arda fırat\Desktop\rag_testfiles")
+def ingest_documents(db_name, embedding_client, folder_path):
+    total_chunks = load_and_split(folder_path)
 
     response = embedding_client.generate_embeddings([chunk['content'] for chunk in total_chunks])
     chunk_embeddings = [item.embedding for item in response.data]
     print(f"Indexed {len(chunk_embeddings)} documents.")
 
-    db_name = "RAGSqlite.db"
 
     conn = sqlite3.connect(db_name)
 
@@ -94,6 +80,78 @@ def main():
         cursor.execute("INSERT INTO documents (text, embedding) VALUES (?, ?)", (chunk['content'], json.dumps(embedding)))
 
     conn.commit()
+
+def get_top_k_chunks(db_name, query, embedding_client, top_k=3):
+
+    conn = sqlite3.connect(db_name)
+    conn.create_function("COS_SIM",2,sqlite_cosine_similarity)
+    cursor = conn.cursor()
+
+    response = embedding_client.generate_embeddings([query])
+    query_embedding = response.data[0].embedding #Sorgu vektörünü alıyoruz
+
+    #Sorgu vektörünü SQL'in işlemesi için JSON string'e çeviriyoruz
+    query_emb_json = json.dumps(query_embedding)
+
+    cursor.execute("""
+        SELECT text, COS_SIM(?, embedding) AS score
+                   FROM documents
+                   ORDER BY score DESC
+                   LIMIT ?""", (query_emb_json,top_k))
+    
+    
+    results=cursor.fetchall()
+
+    return results
+
+def answer_query(db_name, chat_client,contextString, query):
+
+    conn = sqlite3.connect(db_name)
+    
+
+    system_prompt=f"""You are a helpful and strict assistant. 
+Your task is to answer the user's question using ONLY the provided context below.
+If the answer cannot be found in the context, say "I couldn't find the answer in the uploaded documents." Do not make up facts.
+
+---
+CONTEXT:
+{contextString}
+---"""
+
+    """
+    results = find_relevant(query_embedding, rows, top_k=3)
+    """
+    user_prompt = query
+
+    chat_response = chat_client.complete_chat([
+    {"role": "system", "content": system_prompt},
+    {"role": "user", "content": user_prompt}
+    ])
+
+    return chat_response.choices[0].message.content
+
+
+def main():
+
+
+    config = Configuration(app_name="localRAG")
+    FoundryLocalManager.initialize(config)
+    manager = FoundryLocalManager.instance
+
+    # Load the embedding model
+    embedding_model = manager.catalog.get_model("qwen3-embedding-0.6b")
+    embedding_model.download(
+        lambda p: print(f"\rDownloading embedding model: {p:.1f}%", end="", flush=True)
+    )
+    print()
+    embedding_model.load()
+    embedding_client = embedding_model.get_embedding_client()
+
+
+    ingest_documents("RAGSqlite.db", embedding_client, r"C:\Users\arda fırat\Desktop\rag_testfiles")
+
+    conn = sqlite3.connect("RAGSqlite.db")
+    cursor=conn.cursor()
     
     cursor.execute("SELECT id, text, embedding FROM documents")
     rows = cursor.fetchall()
@@ -101,24 +159,33 @@ def main():
 
     print()
     query = input("Enter your query: ")
-    response = embedding_client.generate_embeddings([query])
-    query_embedding = response.data[0].embedding #Sorgu vektörünü alıyoruz
 
-    # Sorgu vektörünü SQL'in işlemesi için JSON string'e çeviriyoruz
-    query_emb_json = json.dumps(query_embedding)
 
-    cursor.execute("""
-        SELECT text, COS_SIM(?, embedding) AS score
-                   FROM documents
-                   ORDER BY score DESC
-                   LIMIT 3""", (query_emb_json,))
+
+    results = get_top_k_chunks("RAGSqlite.db", query, embedding_client, top_k=3)
     
-    
-    results=cursor.fetchall()
 
-    """
-    results = find_relevant(query_embedding, rows, top_k=3)
-    """
+    chat_model = manager.catalog.get_model("phi-3.5-mini")
+    chat_model.download(
+        lambda p: print(f"\rDownloading chat model: {p:.1f}%", end="", flush=True)
+    )
+    print()
+    chat_model.load()
+    chat_client = chat_model.get_chat_client()
+
+    contex_chunks=[]
+    for text, score in results:
+        contex_chunks.append(text)
+
+    contextString = "\n\n".join(contex_chunks)
+    
+    answer = answer_query("RAGSqlite.db", chat_client, contextString, query)
+
+    print("AI'n cevabi: ")
+    print(answer)
+
+
+    print("\n" + "="*40 + "\n")
 
     print("Relevant documents:")
     for text, score in results:
@@ -128,6 +195,7 @@ def main():
     print("="*40)
 
     embedding_model.unload()
+    chat_model.unload()
     conn.close()
 
 if __name__ == "__main__":

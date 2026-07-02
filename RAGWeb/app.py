@@ -8,9 +8,22 @@ from foundry_local_sdk import Configuration, FoundryLocalManager
 from werkzeug.utils import secure_filename
 
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+load_dotenv()
+
+# 🔍 TEST KODU: Bakalım sistem .env dosyasını gerçekten okuyabiliyor mu?
+print("--- ENV TESTİ ---")
+print("Okunan Yol:", os.getenv("UPLOAD_FOLDER_PATH"))
+print("-----------------")
+
+
 app = Flask(__name__)
 DB_NAME = "RAGSqlite.db"
 UPLOAD_FOLDER = "temp_uploads"
+TARGET_FOLDER = os.getenv("UPLOAD_FOLDER_PATH", "temp_uploads")
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
@@ -144,9 +157,7 @@ def upload_file_api():
     uploaded_files = request.files.getlist("files")
     saved_count = 0
 
-    target_folder = r"C:\Users\arda fırat\Desktop\rag_testfiles"##for testing, we keep the uploaded files in a specific folder. You can change this path as needed.
-    if not os.path.exists(target_folder):
-        os.makedirs(target_folder)
+
 
     for file in uploaded_files:
         if file.filename == "":
@@ -159,7 +170,7 @@ def upload_file_api():
         if not filename:
             filename = "uploaded_doc.txt"
 
-        file_path = os.path.join(target_folder, filename)
+        file_path = os.path.join(TARGET_FOLDER, filename)
         file.save(file_path)
         saved_count += 1
 
@@ -167,7 +178,7 @@ def upload_file_api():
         return jsonify({"error": "No valid files uploaded"}), 400
     
     try:
-        ingest_documents(DB_NAME, embedding_client, target_folder)
+        ingest_documents(DB_NAME, embedding_client, TARGET_FOLDER)
         return jsonify({"message": f"{saved_count} files uploaded and processed successfully."}), 200
     except Exception as e:
         return jsonify({"error": f"Error processing files: {str(e)}"}), 500
@@ -176,7 +187,7 @@ def upload_file_api():
 
 @app.route("/deleteall", methods=["POST"])
 def delete_all_files_api():
-    folder_path = r"C:\Users\arda fırat\Desktop\rag_testfiles"
+    folder_path = TARGET_FOLDER
     try:
         if os.path.exists(folder_path):
             for file in os.listdir(folder_path):
@@ -210,7 +221,7 @@ def delete_file_api():
     if not filename:
         return jsonify({"message": "Filename is required."}), 400
         
-    folder_path = r"C:\Users\arda fırat\Desktop\rag_testfiles"
+    folder_path = TARGET_FOLDER
     file_path = os.path.join(folder_path, secure_filename(filename))
     
     if not os.path.exists(file_path):
@@ -229,7 +240,7 @@ def delete_file_api():
     
 @app.route("/documents", methods=["GET"])
 def documents_api():
-    folder_path = r"C:\Users\arda fırat\Desktop\rag_testfiles"
+    folder_path = TARGET_FOLDER
     if os.path.exists(folder_path):
         try:
             files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))]
@@ -272,7 +283,7 @@ if __name__ == "__main__":
 
     if not os.path.exists(DB_NAME):
         print("Database not found. Ingesting documents...")
-        ingest_documents(DB_NAME, embedding_client, r"C:\Users\arda fırat\Desktop\rag_testfiles")
+        ingest_documents(DB_NAME, embedding_client, TARGET_FOLDER)
 
 
     chat_model = manager.catalog.get_model("qwen3.5-2b-text")
